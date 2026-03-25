@@ -1,0 +1,61 @@
+{
+  "listenPort": 80,
+  "auth": {
+    "adminTokenEnv": "ADMIN_TOKEN"
+  },
+  "ai": {
+    "baseUrl": "https://aiapi.hawkins.es/chat/chat",
+    "model": "",
+    "apiKeyEnv": "AI_API_KEY",
+    "timeoutMs": 60000,
+    "enabled": true
+  },
+  "docker": {
+    "pollIntervalMs": 5000,
+    "networkSpike": {
+      "historySize": 30,
+      "zScoreThreshold": 3.5,
+      "minStdBytesPerSec": 51200
+    },
+    "sites": {
+      "minExposedPort": [80, 443],
+      "nameIncludes": ["coolify", "app", "site", "web"]
+    }
+  },
+  "filesystem": {
+    "watchPaths": [],
+    "scanIntervalMs": 60000,
+    "maxFileSizeBytes": 5242880,
+    "hashAlgorithm": "sha256",
+    "ignoreGlobs": [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/storage/logs/**"
+    ],
+    "profiles": {
+      "laravel": ["storage", "public", "bootstrap", "config"],
+      "wordpress": ["wp-content", "wp-includes", "wp-admin", "wp-config.php"],
+      "node": ["src", "public"]
+    }
+  },
+  "alerts": {
+    "dedupeCooldownMs": 300000,
+    "recentLimit": 200
+  },
+  "traffic": {
+    "baselineWindowHours": 24,
+    "sampleWindowSecForRate": 60,
+    "suspectMultiplierOverAvg": 40,
+    "suspectMultiplierOverPeak": 10,
+    "quarantineMultiplierOverAvg": 300,
+    "quarantineCooldownMs": 1800000,
+    "sampleRetentionHours": 48,
+    "recentTrafficLimit": 200
+  },
+  "quarantine": {
+    "enabled": true,
+    "publicNetworkNameRegex": "(traefik|coolify|proxy|public|edge|web)",
+    "releaseAfterMs": 3600000
+  }
+}
+
