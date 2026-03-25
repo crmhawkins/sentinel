@@ -39,6 +39,27 @@ function stddev(arr, m) {
   return Math.sqrt(variance);
 }
 
+function computeCpuPercent(stats) {
+  const cpu = stats?.cpu_stats;
+  const precpu = stats?.precpu_stats;
+  if (!cpu || !precpu) return null;
+
+  const cpuTotal = cpu?.cpu_usage?.total_usage;
+  const prevCpuTotal = precpu?.cpu_usage?.total_usage;
+  const systemTotal = cpu?.system_cpu_usage;
+  const prevSystemTotal = precpu?.system_cpu_usage;
+  if (![cpuTotal, prevCpuTotal, systemTotal, prevSystemTotal].every((v) => Number.isFinite(Number(v)))) return null;
+
+  const cpuDelta = Number(cpuTotal) - Number(prevCpuTotal);
+  const systemDelta = Number(systemTotal) - Number(prevSystemTotal);
+  if (systemDelta <= 0) return null;
+
+  const onlineCpus = Number(cpu?.online_cpus ?? (cpu?.cpu_usage?.percpu_usage?.length || 0));
+  if (!Number.isFinite(onlineCpus) || onlineCpus <= 0) return null;
+
+  return (cpuDelta / systemDelta) * onlineCpus * 100;
+}
+
 function hasAnyLabel(labelObj, substrings) {
   if (!labelObj) return false;
   const entries = Object.entries(labelObj);
@@ -374,6 +395,21 @@ function createDockerMonitor({
         const latestWindowRxRate = windowRxBytes / windowSec;
         const latestWindowTxRate = windowTxBytes / windowSec;
 
+        // Recursos (CPU/Mem) para correlacionar con picos y decisiones de seguridad.
+        if (trafficStore) {
+          try {
+            trafficStore.insertResourceSample({
+              containerId: id,
+              containerName: name,
+              cpuPercent: computeCpuPercent(stats),
+              memUsageBytes: stats?.memory_stats?.usage ?? null,
+              memLimitBytes: stats?.memory_stats?.limit ?? null,
+            });
+          } catch {
+            // ignore
+          }
+        }
+
         // Persist samples (para panel/baseline 24h)
         if (trafficStore) {
           try {
@@ -395,6 +431,7 @@ function createDockerMonitor({
           const olderThan = new Date(Date.now() - trafficCfg.sampleRetentionHours * 60 * 60_000).toISOString();
           try {
             trafficStore.pruneOldSamples({ olderThan });
+            trafficStore.pruneOldResourceSamples({ olderThan });
           } catch {
             // ignore
           }
@@ -505,6 +542,30 @@ function createDockerMonitor({
         });
 
         const attack = !!decision?.attack;
+
+        // Guardamos la evidencia/decisión de la IA para auditoría.
+        if (trafficStore) {
+          try {
+            trafficStore.insertAiTrafficAnalysis({
+              containerId: id,
+              containerName: name,
+              baselineAvgRx: baselineAvg,
+              baselineMaxRx: baselineMax,
+              latestRxRateBytesPerSec: latestWindowRxRate,
+              latestTxRateBytesPerSec: latestWindowTxRate,
+              rxBytesDelta: totalRxBytesDelta,
+              txBytesDelta: totalTxBytesDelta,
+              attack,
+              confidence: decision?.confidence ?? null,
+              reason: decision?.reason ?? null,
+              logsTail,
+              metadata: { latestPoll: { rxRateBytesPerSec: totalRxRate, txRateBytesPerSec: totalTxRate }, decision },
+            });
+          } catch {
+            // ignore
+          }
+        }
+
         if (!attack) {
           state.trafficByContainerId[id] = {
             ...state.trafficByContainerId[id],

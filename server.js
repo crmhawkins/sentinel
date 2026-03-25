@@ -105,12 +105,25 @@ function renderPanelHtml({ adminToken }) {
           <div id="trafficSamplesMeta" class="muted"></div>
         </div>
         <div id="trafficSamples" style="margin-top: 10px;"></div>
+
+        <div style="margin-top: 16px;">
+          <div class="muted" style="margin-bottom: 8px;">Análisis IA (últimos)</div>
+          <div id="aiAnalyses"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 12px;">
+      <div class="card" style="grid-column: 1 / span 2;">
+        <h1>Auditoría Docker (events)</h1>
+        <div class="muted">start/stop/restart/exec/network/image... recientes</div>
+        <div id="dockerEvents" style="margin-top: 10px;"></div>
       </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-      const state = { containers: [], spikes: [], fileEvents: [], alerts: [], traffic: {}, trafficSamples: [], trafficSelectedId: null };
+      const state = { containers: [], spikes: [], fileEvents: [], alerts: [], traffic: {}, trafficSamples: [], trafficSelectedId: null, dockerEvents: [], aiAnalyses: [] };
 
       function bytesPerSec(v) {
         if (!Number.isFinite(v)) return "-";
@@ -215,6 +228,24 @@ function renderPanelHtml({ adminToken }) {
         }
       }
 
+      function renderDockerEvents() {
+        const el = document.getElementById("dockerEvents");
+        el.innerHTML = "";
+        const list = state.dockerEvents || [];
+        if (!list.length) {
+          el.innerHTML = "<div class='muted'>Sin eventos todavía.</div>";
+          return;
+        }
+        for (const ev of list.slice(0, 25)) {
+          const div = document.createElement("div");
+          div.className = "alert";
+          div.innerHTML =
+            "<div class='mono muted'>" + (ev.createdAt || "-") + " • " + (ev.action || "") + " • " + (ev.type || "") + "</div>" +
+            "<div class='mono'>" + (ev.containerName ? (ev.containerName + ": ") : "") + (ev.containerId || "") + "</div>";
+          el.appendChild(div);
+        }
+      }
+
       function renderTraffic() {
         const tbody = document.getElementById("trafficTbody");
         tbody.innerHTML = "";
@@ -295,6 +326,27 @@ function renderPanelHtml({ adminToken }) {
         el.appendChild(tbl);
       }
 
+      function renderAiAnalyses() {
+        const el = document.getElementById("aiAnalyses");
+        el.innerHTML = "";
+        const list = state.aiAnalyses || [];
+        if (!list.length) {
+          el.innerHTML = "<div class='muted'>Sin análisis de IA todavía.</div>";
+          return;
+        }
+        for (const a of list.slice(0, 5)) {
+          const div = document.createElement("div");
+          div.className = "alert";
+          const attackTxt = a.attack ? "ATAQUE" : "LEGITIMO";
+          const cls = a.attack ? "crit" : "ok";
+          div.style.borderLeftColor = a.attack ? "rgba(231, 76, 60, 0.9)" : "rgba(46, 204, 113, 0.35)";
+          div.innerHTML =
+            "<div class='mono muted'>" + (a.createdAt || "-") + " • " + attackTxt + " • conf=" + (a.confidence ?? "-") + "</div>" +
+            "<div class='mono'>" + (a.reason || "") + "</div>";
+          el.appendChild(div);
+        }
+      }
+
       function fetchJson(url, token) {
         return fetch(url, {
           headers: token ? { "Authorization": "Bearer " + token } : {},
@@ -304,12 +356,13 @@ function renderPanelHtml({ adminToken }) {
       async function refreshAll() {
         const token = window.__ADMIN_TOKEN__ || null;
         try {
-          const [containers, spikes, fileEvents, alerts, trafficSummary] = await Promise.all([
+          const [containers, spikes, fileEvents, alerts, trafficSummary, dockerEvents] = await Promise.all([
             fetchJson("/api/containers", token),
             fetchJson("/api/spikes", token),
             fetchJson("/api/fileEvents", token),
             fetchJson("/api/alerts", token),
             fetchJson("/api/trafficSummary", token),
+            fetchJson("/api/dockerAuditEvents", token),
           ]);
           state.containers = containers.containers || [];
           state.spikes = spikes.spikes || [];
@@ -321,8 +374,11 @@ function renderPanelHtml({ adminToken }) {
           renderFileEvents();
           renderAlerts();
           renderTraffic();
+          state.dockerEvents = dockerEvents?.events || [];
+          renderDockerEvents();
           renderTrafficSelect();
           if (state.trafficSelectedId) loadTrafficSamples(state.trafficSelectedId, token);
+          if (state.trafficSelectedId) loadAiAnalyses(state.trafficSelectedId, token);
         } catch (e) {
           console.error(e);
         }
@@ -335,6 +391,18 @@ function renderPanelHtml({ adminToken }) {
           const res = await fetchJson(url, token);
           state.trafficSamples = res?.samples || [];
           renderTrafficSamples();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      async function loadAiAnalyses(containerId, token) {
+        if (!containerId) return;
+        try {
+          const url = "/api/aiTrafficAnalyses?containerId=" + encodeURIComponent(containerId) + "&limit=10";
+          const res = await fetchJson(url, token);
+          state.aiAnalyses = res?.analyses || [];
+          renderAiAnalyses();
         } catch (e) {
           console.error(e);
         }
@@ -357,6 +425,7 @@ function renderPanelHtml({ adminToken }) {
         state.trafficSelectedId = e.target.value;
         const token = window.__ADMIN_TOKEN__ || null;
         loadTrafficSamples(state.trafficSelectedId, token);
+        loadAiAnalyses(state.trafficSelectedId, token);
       });
     </script>
 
@@ -427,6 +496,37 @@ function createWebServer({ config, getState, alertStore, trafficStore }) {
     if (!containerId) return res.status(400).json({ error: "containerId requerido" });
     const samples = trafficStore?.listRecentSamples({ containerId, limit: Number.isFinite(limit) ? limit : 200 }) || [];
     res.json({ samples });
+  });
+
+  app.get("/api/dockerAuditEvents", requireAuth, (req, res) => {
+    const limit = Number(req.query.limit || 50);
+    const events =
+      trafficStore?.listRecentDockerAuditEvents({ limit: Number.isFinite(limit) ? limit : 50 }) || [];
+    res.json({ events });
+  });
+
+  app.get("/api/resourceSamples", requireAuth, (req, res) => {
+    const containerId = String(req.query.containerId || "");
+    const limit = Number(req.query.limit || 200);
+    if (!containerId) return res.status(400).json({ error: "containerId requerido" });
+    const samples =
+      trafficStore?.listRecentResourceSamples({
+        containerId,
+        limit: Number.isFinite(limit) ? limit : 200,
+      }) || [];
+    res.json({ samples });
+  });
+
+  app.get("/api/aiTrafficAnalyses", requireAuth, (req, res) => {
+    const containerId = String(req.query.containerId || "");
+    const limit = Number(req.query.limit || 10);
+    if (!containerId) return res.status(400).json({ error: "containerId requerido" });
+    const analyses =
+      trafficStore?.listRecentAiAnalyses({
+        containerId,
+        limit: Number.isFinite(limit) ? limit : 10,
+      }) || [];
+    res.json({ analyses });
   });
 
   io.on("connection", () => {

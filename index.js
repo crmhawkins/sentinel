@@ -8,11 +8,16 @@ const { initTrafficTables, createTrafficStore } = require("./trafficStore");
 const { buildWatchPathsForCoolifySites } = require("./siteFilesystem");
 const Docker = require("dockerode");
 const pino = require("pino");
+const { createDockerEventsMonitor } = require("./dockereventsMonitor");
 
 const logger = pino({ name: "sv-monitor", level: process.env.LOG_LEVEL || "info" });
 
 async function main() {
   const config = loadConfig();
+  const listenPort = (() => {
+    const p = Number(process.env.LISTEN_PORT);
+    return Number.isFinite(p) && p > 0 ? p : config.listenPort;
+  })();
 
   const db = initDb();
   const alertStore = createAlertStore(db);
@@ -24,6 +29,7 @@ async function main() {
     spikes: [],
     fileEvents: [],
     trafficByContainerId: {},
+    dockerEvents: [],
   };
 
   function getAndSetState(patch) {
@@ -38,8 +44,8 @@ async function main() {
     trafficStore,
   });
 
-  web.server.listen(config.listenPort, () => {
-    logger.info({ port: config.listenPort }, "Panel web escuchando");
+  web.server.listen(listenPort, () => {
+    logger.info({ port: listenPort }, "Panel web escuchando");
   });
 
   const cooldownMsDefault = config.alerts?.dedupeCooldownMs ?? 5 * 60_000;
@@ -88,6 +94,14 @@ async function main() {
   // Arrancamos inmediatamente el monitor Docker.
   dockerMonitor.start();
 
+  const dockerEventsMonitor = createDockerEventsMonitor({
+    trafficStore,
+    dockerOptions,
+    getAndSetState,
+    config,
+  });
+  dockerEventsMonitor.start();
+
   // Construimos watchPaths (si no hay) de forma asíncrona.
   (async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -132,6 +146,9 @@ async function main() {
       dockerMonitor.stop?.();
     } catch {}
     try {
+      dockerEventsMonitor.stop?.();
+    } catch {}
+    try {
       fsMonitor?.stop?.();
     } catch {}
     try {
@@ -144,7 +161,7 @@ async function main() {
     {
       dockerSocketPath,
       dockerHost: process.env.DOCKER_HOST || null,
-      listenPort: config.listenPort,
+      listenPort,
     },
     "SV Monitor inicializado"
   );
