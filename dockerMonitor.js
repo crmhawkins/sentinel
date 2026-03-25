@@ -189,10 +189,15 @@ function createDockerMonitor({
     // Para baseline "down" y "recovered"
     const prevContainersById = new Map((state.containers || []).map((c) => [c.id, c]));
 
-    const list = await docker.listContainers({ all: true });
-    const seenIds = new Set();
+    let listOk = false;
+    let seenCount = 0;
 
-    for (const c of list) {
+    try {
+      const list = await docker.listContainers({ all: true });
+      listOk = true;
+      const seenIds = new Set();
+
+      for (const c of list) {
       const id = c.Id;
       const name = c.Names?.[0] ? safeName(c.Names[0]) : id.slice(0, 12);
       if (!name) continue;
@@ -623,12 +628,15 @@ function createDockerMonitor({
       }
     }
 
-    // Contenedores desaparecen => no limpiamos (el panel se actualiza con latestContainers).
-    getAndSetState({
-      containers: latestContainers,
-    });
+      seenCount = seenIds.size;
+    } finally {
+      // Si el bucle de tráfico/IA/cuarentena lanza, igual publicamos la lista ya recopilada.
+      if (listOk) {
+        getAndSetState({ containers: latestContainers });
+      }
+    }
 
-    return { seen: seenIds.size };
+    return { seen: seenCount };
   }
 
   function start() {
