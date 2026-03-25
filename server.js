@@ -412,6 +412,9 @@ function renderPanelHtml({ adminToken }) {
           let hint = (e && e.message) ? String(e.message) : String(e);
           if (st === 401) {
             hint = "401 unauthorized: en Coolify quita la variable ADMIN_TOKEN o pon el mismo valor que en Environment Variables. Sin el token correcto el panel no puede leer /api/containers.";
+          } else if (String(hint).includes("Failed to fetch") || String(hint).includes("NetworkError")) {
+            hint +=
+              " Si abres por HTTP y el proxy redirige la API a HTTPS, entra siempre por la misma URL (http o https) o arregla el certificado SSL en Coolify.";
           }
           showApiBanner(hint);
         }
@@ -495,16 +498,23 @@ function createWebServer({ config, getState, alertStore, trafficStore }) {
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'", "'unsafe-inline'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
-          connectSrc: ["'self'", "ws:", "wss:"],
+          connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
           imgSrc: ["'self'", "data:"],
           fontSrc: ["'self'"],
+          // Helmet añade por defecto upgrade-insecure-requests: fuerza fetch() a HTTPS aunque la página sea HTTP → CORS / 404 detrás de proxy.
+          upgradeInsecureRequests: null,
         },
       },
       crossOriginOpenerPolicy: false,
       originAgentCluster: false,
     })
   );
-  app.use(cors());
+  app.use(
+    cors({
+      origin: true,
+      credentials: false,
+    })
+  );
 
   const server = http.createServer(app);
   const io = new SocketIOServer(server, {
