@@ -2,10 +2,8 @@ FROM node:24-bullseye-slim
 
 WORKDIR /app
 
-# build tools for native deps (better-sqlite3)
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
+# better-sqlite3: preferir prebuild (evita gcc/g++/python y reduce RAM en el build de Coolify).
+ENV npm_config_build_from_source=false
 
 COPY package*.json ./
 RUN npm install --omit=dev
@@ -17,4 +15,3 @@ EXPOSE 80
 ENV NODE_ENV=production
 
 CMD ["node", "index.js"]
-
