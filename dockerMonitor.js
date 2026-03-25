@@ -125,6 +125,7 @@ function createDockerMonitor({
   aiCfg,
   getAndSetState,
   config,
+  logger,
 }) {
   const docker = new Docker(dockerOptions);
 
@@ -633,9 +634,14 @@ function createDockerMonitor({
   function start() {
     if (running) return;
     running = true;
-    pollOnce().catch(() => {});
+    const onErr = (e) => {
+      const msg = e?.message ?? String(e);
+      if (logger) logger.warn({ err: msg }, "dockerMonitor: pollOnce falló (¿socket Docker o permisos?)");
+      else console.error("dockerMonitor: pollOnce falló", msg);
+    };
+    pollOnce().catch(onErr);
     timer = setInterval(() => {
-      pollOnce().catch(() => {});
+      pollOnce().catch(onErr);
     }, pollIntervalMs);
   }
 

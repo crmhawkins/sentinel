@@ -35,6 +35,7 @@ function renderPanelHtml({ adminToken }) {
   <body>
     <h1>SV Monitor</h1>
     <div class="muted">Se actualiza cada 5s. Alertas en tiempo real vía WebSocket.</div>
+    <div id="apiBanner" class="card" style="margin-top: 10px; display: none; border-color: rgba(231, 76, 60, 0.6); background: rgba(231, 76, 60, 0.12);"></div>
 
     <div class="grid" style="margin-top: 12px;">
       <div class="card">
@@ -121,7 +122,6 @@ function renderPanelHtml({ adminToken }) {
       </div>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
       const state = { containers: [], spikes: [], fileEvents: [], alerts: [], traffic: {}, trafficSamples: [], trafficSelectedId: null, dockerEvents: [], aiAnalyses: [] };
 
@@ -350,7 +350,33 @@ function renderPanelHtml({ adminToken }) {
       function fetchJson(url, token) {
         return fetch(url, {
           headers: token ? { "Authorization": "Bearer " + token } : {},
-        }).then(r => r.json());
+        }).then(async (r) => {
+          let data = {};
+          try {
+            data = await r.json();
+          } catch {
+            data = {};
+          }
+          if (!r.ok) {
+            const err = new Error(data.error || ("HTTP " + r.status));
+            err.status = r.status;
+            err.data = data;
+            throw err;
+          }
+          return data;
+        });
+      }
+
+      function showApiBanner(msg) {
+        const el = document.getElementById("apiBanner");
+        if (!el) return;
+        if (!msg) {
+          el.style.display = "none";
+          el.innerHTML = "";
+          return;
+        }
+        el.style.display = "block";
+        el.innerHTML = "<strong>Error API</strong><div class='mono' style='margin-top:6px'>" + msg + "</div>";
       }
 
       async function refreshAll() {
@@ -379,8 +405,15 @@ function renderPanelHtml({ adminToken }) {
           renderTrafficSelect();
           if (state.trafficSelectedId) loadTrafficSamples(state.trafficSelectedId, token);
           if (state.trafficSelectedId) loadAiAnalyses(state.trafficSelectedId, token);
+          showApiBanner("");
         } catch (e) {
           console.error(e);
+          const st = e && e.status;
+          let hint = (e && e.message) ? String(e.message) : String(e);
+          if (st === 401) {
+            hint = "401 unauthorized: en Coolify quita la variable ADMIN_TOKEN o pon el mismo valor que en Environment Variables. Sin el token correcto el panel no puede leer /api/containers.";
+          }
+          showApiBanner(hint);
         }
       }
 
@@ -408,13 +441,28 @@ function renderPanelHtml({ adminToken }) {
         }
       }
 
-      // WebSocket (alertas en tiempo real)
-      const socket = io();
-      socket.on("alert", (a) => {
-        state.alerts.unshift(a);
-        state.alerts = state.alerts.slice(0, 100);
-        renderAlerts();
-      });
+      // WebSocket opcional (si falla el script o el certificado TLS, el panel sigue con polling)
+      (function attachSocketWhenReady() {
+        const s = document.createElement("script");
+        s.src = "/socket.io/socket.io.js";
+        s.onload = function () {
+          try {
+            if (typeof io === "undefined") return;
+            const socket = io({ transports: ["websocket", "polling"] });
+            socket.on("alert", (a) => {
+              state.alerts.unshift(a);
+              state.alerts = state.alerts.slice(0, 100);
+              renderAlerts();
+            });
+          } catch (e) {
+            console.warn("Socket.IO no conectado:", e);
+          }
+        };
+        s.onerror = function () {
+          console.warn("socket.io.js no cargado (TLS/cert o red); alertas solo vía polling cada 5s.");
+        };
+        document.head.appendChild(s);
+      })();
 
       // Refresh periódico
       refreshAll();
@@ -439,7 +487,23 @@ function renderPanelHtml({ adminToken }) {
 
 function createWebServer({ config, getState, alertStore, trafficStore }) {
   const app = express();
-  app.use(helmet());
+  // Panel con HTML y scripts inline: CSP debe permitirlo. COOP estricto en HTTP da avisos en consola.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          connectSrc: ["'self'", "ws:", "wss:"],
+          imgSrc: ["'self'", "data:"],
+          fontSrc: ["'self'"],
+        },
+      },
+      crossOriginOpenerPolicy: false,
+      originAgentCluster: false,
+    })
+  );
   app.use(cors());
 
   const server = http.createServer(app);

@@ -86,6 +86,7 @@ async function main() {
     aiCfg: config.ai ?? {},
     getAndSetState,
     config,
+    logger,
   });
 
   // Monitor filesystem (integridad básica)
